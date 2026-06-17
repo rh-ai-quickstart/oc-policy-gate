@@ -1,6 +1,11 @@
 # oc-policy-gate
 
-Namespace-scoped access control for AI coding agents (Claude Code, Cursor) operating on OpenShift/Kubernetes clusters.
+Namespace-scoped access control for AI coding agents operating on OpenShift/Kubernetes clusters.
+
+| Agent | Status |
+|-------|--------|
+| Claude Code | Supported |
+| Cursor | Coming soon |
 
 A **PreToolUse hook** that intercepts `oc`, `kubectl`, and `helm` commands and enforces verb-level permissions per namespace — before the command ever runs.
 
@@ -98,7 +103,7 @@ git subtree pull --prefix=.claude/hooks oc-policy-gate master --squash
 
 ## How It Works
 
-Every command in Claude Code / Cursor passes through a gate pipeline:
+Every command in Claude Code passes through a gate pipeline:
 
 ```mermaid
 flowchart TD
