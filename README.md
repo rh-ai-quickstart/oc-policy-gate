@@ -65,6 +65,13 @@ Add to your `.claude/settings.json`:
 
 ```json
 {
+  "permissions": {
+    "deny": [
+      "Read(./.claude/hooks/**)",
+      "Edit(./.claude/hooks/**)",
+      "Write(./.claude/hooks/**)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
