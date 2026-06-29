@@ -32,6 +32,18 @@ COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null) || ask
 [[ -z "$COMMAND" ]] && ask
 echo "$COMMAND" | grep -qwE '(oc|kubectl|helm)' || ask
 
+# Derive a deterministic default namespace from repo name + OS user.
+derive_default_ns() {
+  local repo_root repo_base user default_ns
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || repo_root="$PWD"
+  repo_base="$(basename "$repo_root")"
+  user="$(whoami)"
+  repo_base="$(echo "${repo_base:0:30}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/-\+/-/g; s/-$//')"
+  user="$(echo "${user:0:20}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/-\+/-/g; s/-$//')"
+  default_ns="opg-${repo_base}-${user}"
+  echo "$default_ns" | sed 's/-$//'
+}
+
 # Load per-namespace permission groups from openshift-policy.yaml.
 declare -A OC_GROUPS HELM_GROUPS
 
@@ -49,6 +61,13 @@ if [[ -f "$POLICY_FILE" ]]; then
       fi
     fi
   done < "$POLICY_FILE"
+fi
+
+# Fallback: derive default namespace when policy has no namespaces configured.
+if [[ ${#OC_GROUPS[@]} -eq 0 && ${#HELM_GROUPS[@]} -eq 0 ]]; then
+  _default_ns="$(derive_default_ns)"
+  OC_GROUPS["$_default_ns"]="read,write,exec"
+  HELM_GROUPS["$_default_ns"]="read,write,destructive"
 fi
 
 # Comma-separated namespace list for deny messages.

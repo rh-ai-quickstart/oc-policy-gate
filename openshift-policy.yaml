@@ -1,10 +1,1 @@
 namespaces:
-  pdf-to-podcast:
-    oc: [read, write, exec]
-    helm: [read, write]
-  my-app-staging:
-    oc: [read, write]
-    helm: [read]
-  my-app-prod:
-    oc: [read]
-    helm: [read]

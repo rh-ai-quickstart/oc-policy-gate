@@ -18,7 +18,8 @@ namespaces:
     helm: [read]
 YAML
 export OPENSHIFT_POLICY_FILE="$TEST_POLICY"
-trap 'rm -f "$TEST_POLICY"' EXIT
+EMPTY_POLICY="" MOCK_DIR=""
+trap 'rm -f "$TEST_POLICY" "$EMPTY_POLICY"; rm -rf "$MOCK_DIR"' EXIT
 
 passed=0 failed=0
 
@@ -299,6 +300,159 @@ run_test 85 ALLOW 'echo $(echo $(oc exec -n my-app-dev mypod -- cat /etc/passwd)
   "nested subshell + exec verb + post--- args: exec allowed in dev"
 run_test 86 ASK   'echo "you should use oc to check pods"' \
   "false positive: oc in prose string, non-verb word after oc -> ask"
+
+echo ""
+echo "=== Default namespace derivation tests ==="
+
+# Save original policy and create empty one
+EMPTY_POLICY=$(mktemp /tmp/test-empty-policy-XXXXXX.yaml)
+echo "namespaces:" > "$EMPTY_POLICY"
+export OPENSHIFT_POLICY_FILE="$EMPTY_POLICY"
+
+# Compute expected default namespace using the same formula
+_repo_base=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")")
+_user=$(whoami)
+_repo_base=$(echo "${_repo_base:0:30}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/-\+/-/g; s/-$//')
+_user=$(echo "${_user:0:20}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/-\+/-/g; s/-$//')
+DEFAULT_NS="opg-${_repo_base}-${_user}"
+DEFAULT_NS=$(echo "$DEFAULT_NS" | sed 's/-$//')
+
+echo "Derived default namespace: $DEFAULT_NS"
+
+run_test 87 ALLOW "oc get pods -n $DEFAULT_NS" \
+  "default ns: oc read on derived ns -> allow"
+run_test 88 ALLOW "oc delete pod mypod -n $DEFAULT_NS" \
+  "default ns: oc write on derived ns -> allow"
+run_test 89 ALLOW "oc exec -it mypod -n $DEFAULT_NS -- bash" \
+  "default ns: oc exec on derived ns -> allow"
+run_test 90 ALLOW "helm install myrelease mychart -n $DEFAULT_NS" \
+  "default ns: helm write on derived ns -> allow"
+run_test 91 ALLOW "helm uninstall myrelease -n $DEFAULT_NS" \
+  "default ns: helm destructive on derived ns -> allow"
+run_test 92 ASK   "oc get pods -n some-other-ns" \
+  "default ns: unknown ns still asks"
+run_test 93 DENY  "oc get pods" \
+  "default ns: missing -n still denied"
+
+echo ""
+echo "=== derive_default_ns() function alignment test ==="
+
+# Extract function body from openshift-policy.sh and README.md, compare
+FUNC_FROM_HOOK=$(sed -n '/^derive_default_ns()/,/^}/p' "$HOOK")
+FUNC_FROM_README=$(sed -n '/^derive_default_ns()/,/^}/p' "${SCRIPT_DIR}/README.md")
+
+if [[ "$FUNC_FROM_HOOK" == "$FUNC_FROM_README" ]]; then
+  printf "\033[32mPASS\033[0m #%-2s %s\n" "94" "derive_default_ns() in openshift-policy.sh matches README.md"
+  ((passed++))
+else
+  printf "\033[31mFAIL\033[0m #%-2s %s\n" "94" "derive_default_ns() differs between openshift-policy.sh and README.md"
+  diff <(echo "$FUNC_FROM_HOOK") <(echo "$FUNC_FROM_README") | head -20
+  ((failed++))
+fi
+
+echo ""
+echo "=== derive_default_ns() sanitization tests ==="
+
+# Extract function from hook, then run with mocked git/whoami to test various inputs.
+MOCK_DIR=$(mktemp -d /tmp/test-mock-XXXXXX)
+FUNC_BODY=$(sed -n '/^derive_default_ns()/,/^}/p' "$HOOK")
+
+# Helper: run derive_default_ns with controlled repo path and username.
+# Mocks: git rev-parse → returns $1, whoami → returns $2.
+run_derive_test() {
+  local num="$1" mock_repo="$2" mock_user="$3" expected="$4" desc="$5"
+
+  mkdir -p "${MOCK_DIR}/bin"
+  cat > "${MOCK_DIR}/bin/git" <<SCRIPT
+#!/bin/bash
+if [[ "\$1" == "rev-parse" ]]; then echo "$mock_repo"; exit 0; fi
+exec /usr/bin/git "\$@"
+SCRIPT
+  cat > "${MOCK_DIR}/bin/whoami" <<SCRIPT
+#!/bin/bash
+echo "$mock_user"
+SCRIPT
+  chmod +x "${MOCK_DIR}/bin/git" "${MOCK_DIR}/bin/whoami"
+
+  local actual
+  actual=$(PATH="${MOCK_DIR}/bin:$PATH" bash -c "${FUNC_BODY}"$'\nderive_default_ns' 2>/dev/null)
+
+  if [[ "$actual" == "$expected" ]]; then
+    printf "\033[32mPASS\033[0m #%-2s %s\n" "$num" "$desc"
+    ((passed++))
+  else
+    printf "\033[31mFAIL\033[0m #%-2s %s\n" "$num" "$desc"
+    echo "       Expected: '$expected'  Got: '$actual'"
+    ((failed++))
+  fi
+}
+
+# Basic case
+run_derive_test 95 "/home/user/nvidia-rag-blueprint" "jdoe" \
+  "opg-nvidia-rag-blueprint-jdoe" \
+  "basic: simple repo + user"
+
+# Uppercase → lowercase
+run_derive_test 96 "/home/user/My-Cool-Repo" "JDoe" \
+  "opg-my-cool-repo-jdoe" \
+  "uppercase repo and user lowercased"
+
+# Dots → hyphens
+run_derive_test 97 "/home/user/my.repo.name" "j.doe" \
+  "opg-my-repo-name-j-doe" \
+  "dots replaced with hyphens"
+
+# Underscores → hyphens
+run_derive_test 98 "/home/user/my_repo_name" "j_doe" \
+  "opg-my-repo-name-j-doe" \
+  "underscores replaced with hyphens"
+
+# Consecutive special chars → single hyphen
+run_derive_test 99 "/home/user/my...repo" "j___doe" \
+  "opg-my-repo-j-doe" \
+  "consecutive special chars collapsed to single hyphen"
+
+# Trailing special char → stripped
+run_derive_test 100 "/home/user/my-repo-" "jdoe." \
+  "opg-my-repo-jdoe" \
+  "trailing special chars stripped from both parts"
+
+# Long repo name → truncated to 30 chars
+run_derive_test 101 "/home/user/abcdefghijklmnopqrstuvwxyz12345678" "u" \
+  "opg-abcdefghijklmnopqrstuvwxyz1234-u" \
+  "repo basename truncated to 30 chars"
+
+# Long username → truncated to 20 chars
+run_derive_test 102 "/home/user/r" "abcdefghijklmnopqrstuvwxyz" \
+  "opg-r-abcdefghijklmnopqrst" \
+  "username truncated to 20 chars"
+
+# Both at max length → total ≤ 55 chars (opg- + 30 + - + 20)
+run_derive_test 103 "/home/user/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb" \
+  "opg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbb" \
+  "max lengths: total namespace ≤ 55 chars"
+
+# Mixed special chars
+run_derive_test 104 "/home/user/My_Repo.v2" "Jane.Doe_Admin" \
+  "opg-my-repo-v2-jane-doe-admin" \
+  "mixed special chars: uppercase + dots + underscores"
+
+# Repo name ending with truncation at special char
+run_derive_test 105 "/home/user/abcdefghijklmnopqrstuvwxyz123.remaining" "u" \
+  "opg-abcdefghijklmnopqrstuvwxyz123-u" \
+  "truncation at 30 leaves trailing dot -> hyphen -> stripped"
+
+# Single-char names
+run_derive_test 106 "/home/user/x" "y" \
+  "opg-x-y" \
+  "single-char repo and user"
+
+# Username ending with hyphen → trailing hyphen stripped from final namespace
+run_derive_test 107 "/home/user/repo" "jdoe-" \
+  "opg-repo-jdoe" \
+  "username ending with hyphen: trailing hyphen stripped"
+# Restore original policy
+export OPENSHIFT_POLICY_FILE="$TEST_POLICY"
 
 echo ""
 echo "=== Results ==="
