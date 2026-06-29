@@ -1,0 +1,20 @@
+# Example namespace policy for oc-policy-gate.
+# Copy this file to openshift-policy.yaml and edit to match your cluster.
+#
+# Permission groups:
+#   oc:   read, write, exec
+#   helm: read, write, destructive
+#
+# Leave namespaces empty (or remove the file) to use the auto-derived
+# default namespace: opg-{repo-basename}-{username}
+
+namespaces:
+  my-app-dev:
+    oc: [read, write, exec]
+    helm: [read, write, destructive]
+  my-app-staging:
+    oc: [read, write]
+    helm: [read, write]
+  my-app-prod:
+    oc: [read]
+    helm: [read]
