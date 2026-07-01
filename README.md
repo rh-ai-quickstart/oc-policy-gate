@@ -61,7 +61,7 @@ namespaces:
 
 ### 3. Wire up the hook
 
-Add to your `.claude/settings.json`:
+Copy [`settings.claude_example.json`](settings.claude_example.json) to `.claude/settings.json`, or add the following to your existing settings:
 
 ```json
 {

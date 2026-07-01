@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.claude/hooks/**)",
+      "Edit(./.claude/hooks/**)",
+      "Write(./.claude/hooks/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*oc *)",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/openshift-policy.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*kubectl *)",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/openshift-policy.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*helm *)",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/openshift-policy.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
