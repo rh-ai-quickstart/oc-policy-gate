@@ -48,19 +48,12 @@ derive_default_ns() {
 declare -A OC_GROUPS HELM_GROUPS
 
 if [[ -f "$POLICY_FILE" ]]; then
-  current_ns=""
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[[:space:]]{2}([a-zA-Z0-9][a-zA-Z0-9._-]*):[[:space:]]*$ ]]; then
-      current_ns="${BASH_REMATCH[1]}"
-    elif [[ -n "$current_ns" && "$line" =~ ^[[:space:]]+(oc|helm):[[:space:]]*\[([^\]]*)\] ]]; then
-      groups=$(echo "${BASH_REMATCH[2]}" | tr -d ' ')
-      if [[ "${BASH_REMATCH[1]}" == "oc" ]]; then
-        OC_GROUPS["$current_ns"]="$groups"
-      else
-        HELM_GROUPS["$current_ns"]="$groups"
-      fi
-    fi
-  done < "$POLICY_FILE"
+  command -v yq &>/dev/null || { echo "Error: yq is required but not installed." >&2; exit 2; }
+  while IFS=$'\t' read -r ns oc_val helm_val; do
+    [[ -z "$ns" ]] && continue
+    [[ -n "$oc_val" ]] && OC_GROUPS["$ns"]="$oc_val"
+    [[ -n "$helm_val" ]] && HELM_GROUPS["$ns"]="$helm_val"
+  done < <(yq '.namespaces | to_entries[] | [.key, (.value.oc // [] | join(",")), (.value.helm // [] | join(","))] | @tsv' "$POLICY_FILE" 2>/dev/null)
 fi
 
 # Fallback: derive default namespace when policy has no namespaces configured.
