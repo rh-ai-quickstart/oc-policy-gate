@@ -11,9 +11,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq python3
 
       - name: Run policy hook tests
         run: |
           chmod +x openshift-policy.sh test-openshift-policy.sh
           ./test-openshift-policy.sh
+
+      - name: Run Codex hook tests
+        run: python3 -m unittest -v test_openshift_policy_codex.py

@@ -295,9 +295,8 @@ python3 -m unittest -v test_openshift_policy_codex.py
 
 The shared checker has 107 cases covering read/write/exec verbs, namespace
 enforcement, pipes, compound commands, redirects, multi-word verbs, and default
-namespace derivation. The Codex tests exercise the `PermissionRequest` contract, dependency
-failures, invalid input, and the documented hook command from a subdirectory
-with spaces. All proposed
+namespace derivation. The Codex tests exercise the `PermissionRequest` contract,
+dependency failures, invalid input, and Claude compatibility. All proposed
 cluster commands are test input only; the tests never run them.
 
 After installing the rules, check their matching without executing a cluster

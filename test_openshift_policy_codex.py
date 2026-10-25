@@ -8,13 +8,11 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import re
 import tempfile
 import unittest
 
 
 GATE = Path(__file__).resolve().parent
-ROOT = GATE.parent.parent
 CHECKER = GATE / "openshift-policy.sh"
 BASH = shutil.which("bash")
 EVENTS = ("PermissionRequest",)
@@ -42,7 +40,7 @@ class CodexPolicyTests(unittest.TestCase):
             "hook_event_name": event,
             "tool_name": "Bash",
             "tool_input": {"command": command},
-            "cwd": str(ROOT),
+            "cwd": str(GATE),
         }
         payload.update(kwargs.pop("payload", {}))
         return subprocess.run(
@@ -190,95 +188,6 @@ class CodexPolicyTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(result.stdout)
-
-
-@unittest.skipUnless((ROOT / "core/scripts/sync-clients.sh").is_file(), "repository sync integration only")
-class CodexInstallationTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="codex-policy-install-")
-        self.addCleanup(self.temp.cleanup)
-        self.repo = Path(self.temp.name) / "project with spaces"
-        gate = self.repo / "core/oc-policy-gate"
-        shutil.copytree(GATE, gate, ignore=shutil.ignore_patterns("__pycache__"))
-        (gate / "openshift-policy.yaml").write_text(POLICY)
-        scripts = self.repo / "core/scripts"
-        scripts.mkdir()
-        shutil.copyfile(ROOT / "core/scripts/sync-clients.sh", scripts / "sync-clients.sh")
-        (self.repo / "core/skills").mkdir()
-        subprocess.run(["git", "init", "--quiet", str(self.repo)], check=True)
-
-    def sync(self):
-        result = subprocess.run(
-            ["bash", "core/scripts/sync-clients.sh"], cwd=self.repo,
-            capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return result
-
-    def test_sync_installs_relative_links_and_preserves_other_hooks(self):
-        hooks = self.repo / ".codex/hooks"
-        hooks.mkdir(parents=True)
-        unrelated = hooks / "other-policy"
-        unrelated.symlink_to("../../core/scripts/sync-clients.sh")
-        self.sync()
-        self.sync()
-        for path in hooks.iterdir():
-            self.assertTrue(path.is_symlink(), path)
-            self.assertFalse(os.readlink(path).startswith("/"), path)
-            self.assertTrue(path.exists(), path)
-        self.assertTrue(unrelated.is_symlink())
-        self.assertFalse((self.repo / ".codex/hooks.json").exists())
-
-    def test_sync_preserves_existing_hook_configuration(self):
-        codex = self.repo / ".codex"
-        codex.mkdir()
-        config = codex / "hooks.json"
-        config.write_text('{"hooks": {}}\n')
-        self.sync()
-        self.assertEqual(config.read_text(), '{"hooks": {}}\n')
-        self.assertFalse(config.is_symlink())
-
-    def test_sync_preserves_unrelated_configuration_symlink(self):
-        codex = self.repo / ".codex"
-        codex.mkdir()
-        source = self.repo / "custom-hooks.json"
-        source.write_text('{"hooks": {}}\n')
-        config = codex / "hooks.json"
-        config.symlink_to("../custom-hooks.json")
-        self.sync()
-        self.assertEqual(os.readlink(config), "../custom-hooks.json")
-
-    def test_configured_hooks_work_from_subdirectory_with_spaces(self):
-        self.sync()
-        # Configuration is installed manually, never by sync-clients.sh.
-        section = (GATE / "README.md").read_text().split("## Codex setup", 1)[1]
-        documented = re.search(r"```json\n(.*?)\n```", section, re.S).group(1)
-        (self.repo / ".codex/hooks.json").write_text(documented)
-        cwd = self.repo / "ordinary subdirectory"
-        cwd.mkdir()
-        config = json.loads((self.repo / ".codex/hooks.json").read_text())
-        self.assertEqual(set(config["hooks"]), {"PermissionRequest"})
-        for event in EVENTS:
-            group, = config["hooks"][event]
-            self.assertEqual(group["matcher"], "^Bash$")
-            handler, = group["hooks"]
-            self.assertEqual(handler["type"], "command")
-            self.assertFalse(handler["async"])
-            self.assertGreater(handler["timeout"], 0)
-            self.assertNotIn("if", handler)
-            self.assertNotIn("onFailure", handler)
-            result = subprocess.run(
-                ["bash", "-c", handler["command"]], cwd=cwd,
-                input=json.dumps({
-                    "hook_event_name": event, "tool_name": "Bash",
-                    "tool_input": {"command": "oc get pods"}, "cwd": str(cwd),
-                }), capture_output=True, text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            output = json.loads(result.stdout)["hookSpecificOutput"]
-            self.assertEqual(output["hookEventName"], event)
-            decision = output["decision"]["behavior"] if event == "PermissionRequest" else output["permissionDecision"]
-            self.assertEqual(decision, "deny")
 
 
 if __name__ == "__main__":
