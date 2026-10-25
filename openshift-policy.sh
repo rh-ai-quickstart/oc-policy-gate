@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook: gate oc/kubectl/helm commands against namespace policy.
+# Gate oc/kubectl/helm commands against namespace policy.
+# Default: Claude PreToolUse. Use --client codex for Codex PermissionRequest.
 #
 # Exit outcomes (stdout):
 #   allow  — JSON {"permissionDecision":"allow"}     → run without prompt
@@ -8,27 +9,69 @@
 #
 set -e
 
+CLIENT=claude
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != --client || ( "$2" != claude && "$2" != codex ) ]]; then
+    echo "Usage: $0 [--client claude|codex]" >&2
+    exit 2
+  fi
+  CLIENT="$2"
+fi
+
+# Codex PermissionRequest needs explicit JSON to deny a failed check. Use only
+# Bash builtins here so even a missing/broken jq can produce a denial.
+if [[ "$CLIENT" == codex ]]; then
+  trap 'gate_status=$?; if (( gate_status != 0 )); then
+    printf '\''{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"oc-policy-gate: policy check failed; see hook stderr."}}}\n'\''
+    exit 0
+  fi' EXIT
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLICY_FILE="${OPENSHIFT_POLICY_FILE:-${SCRIPT_DIR}/openshift-policy.yaml}"
 
-# Hook responses — tell Cursor to allow, deny (with reason), or fall back to user prompt.
-allow() {
+# Hook responses — policy logic below is shared by both clients.
+allow_claude() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}\n'
   exit 0
 }
 
-deny() {
+deny_claude() {
   jq -n --arg r "$1" \
     '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":$r}}'
   exit 0
 }
 
+allow_codex() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}\n'
+  exit 0
+}
+
+deny_codex() {
+  jq -n --arg r "$1" \
+    '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":$r}}}'
+  exit 0
+}
+
+allow() { "allow_$CLIENT"; }
+deny() { "deny_$CLIENT" "$1"; }
 ask() { exit 0; }
 
 # Read command from hook input; skip if empty or not a cluster tool.
 command -v jq &>/dev/null || { echo "Error: jq is required but not installed." >&2; exit 2; }
 
-COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null) || ask
+if [[ "$CLIENT" == codex ]]; then
+  # Unexpected tool/event or missing/non-string command: no decision.
+  COMMAND=$(jq -r '
+    if type == "object" and .hook_event_name == "PermissionRequest" and .tool_name == "Bash" then
+      .tool_input | if type == "object" then
+        .command | if type == "string" then . else empty end
+      else empty end
+    else empty end
+  ' 2>/dev/null) || ask
+else
+  COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null) || ask
+fi
 [[ -z "$COMMAND" ]] && ask
 echo "$COMMAND" | grep -qwE '(oc|kubectl|helm)' || ask
 
@@ -206,7 +249,7 @@ while IFS= read -r segment; do
 
 done < <(echo "$COMMAND" | sed $'s/\\$(/\\\n/g; s/`/\\\n/g; s/)/\\\n/g' | awk '{gsub(/\|\|/, "\n"); gsub(/&&/, "\n"); gsub(/;/, "\n"); gsub(/\|/, "\n"); print}')
 
-# Emit final decision to Cursor.
+# Emit final decision for the selected client.
 if $has_deny; then deny "$deny_reason"
 elif $has_ask; then ask
 else allow
