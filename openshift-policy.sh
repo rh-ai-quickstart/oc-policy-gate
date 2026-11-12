@@ -129,7 +129,7 @@ HELM_WRITE="|install|upgrade|dependency update|dependency build|"
 HELM_DESTRUCTIVE="|uninstall|rollback|delete|"
 
 MW_PREFIXES="|rollout|auth|dependency|repo|plugin|"
-SAFE_UTILS="|grep|wc|head|tail|cut|tr|column|jq|cat|fmt|base64|echo|diff|printf|"
+SAFE_UTILS="|grep|wc|head|tail|cut|tr|column|jq|cat|fmt|base64|echo|diff|printf|rg|nl|rev|fold|paste|"
 
 # Check if verb appears in a pipe-delimited list.
 verb_in() { [[ "$2" == *"|$1|"* ]]; }
